@@ -1,0 +1,49 @@
+name: Post GoogleNews → X
+
+on:
+  schedule:
+    # GitHub Actions の cron は UTC。JST(UTC+9)換算：
+    # 07:30 JST = 22:30 UTC(前日) / 12:15 JST = 03:15 UTC / 18:30 JST = 09:30 UTC
+    - cron: '30 22 * * *'
+    - cron: '15 3 * * *'
+    - cron: '30 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write  # seen.txt をコミットするため
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run app
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          TEMPLATE_VARIANT: ${{ vars.TEMPLATE_VARIANT }}   # 'normal' or 'yasashii'
+          POST_SLOTS_PER_RUN: '1'
+        run: python app.py
+
+      - name: Commit seen.txt
+        if: success()
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add seen.txt
+            git commit -m "update seen list [skip ci]"
+            git push
+          fi
