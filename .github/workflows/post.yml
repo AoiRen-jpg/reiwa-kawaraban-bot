@@ -1,20 +1,36 @@
 name: Post GoogleNews → X
 
 on:
+  # 手動実行用
   workflow_dispatch:
+  # スケジュール実行（JST 07:30 / 12:15 / 18:30）
+  schedule:
+    # GitHubはUTCなのでJSTより9時間マイナス
+    - cron: "30 22 * * *"   # JST 07:30
+    - cron: "15 3 * * *"    # JST 12:15
+    - cron: "30 9 * * *"    # JST 18:30
+
+permissions:
+  contents: write   # seen.txt をコミットするのに必要
 
 jobs:
-  build:
+  post:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # seen.txtの差分を取るため
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: "3.11"
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+
       - name: Run app
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -22,4 +38,19 @@ jobs:
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          # 必要ならここに TEMPLATE_VARIANT も載せられる
+          # TEMPLATE_VARIANT: ${{ vars.TEMPLATE_VARIANT }}
         run: python app.py
+
+      - name: Commit seen.txt
+        if: success()
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add seen.txt
+            git commit -m "update seen list [skip ci]"
+            git push
+          fi
