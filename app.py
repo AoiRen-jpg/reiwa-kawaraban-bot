@@ -7,7 +7,7 @@ import feedparser
 from requests_oauthlib import OAuth1
 
 # ========= 設定エリア =========
-TEMPLATE_VARIANT = os.getenv("TEMPLATE_VARIANT", "normal")
+TEMPLATE_VARIANT = os.getenv("TEMPLATE_VARIANT", "yasashii")  # ← やさしい版をデフォルトに
 POST_SLOTS_PER_RUN = int(os.getenv("POST_SLOTS_PER_RUN", "1"))
 RSS_LIST = [
     "https://news.google.com/rss/search?q=%E6%97%A5%E9%8A%80+OR+%E9%87%91%E5%88%A9&hl=ja&gl=JP&ceid=JP:ja",
@@ -15,13 +15,13 @@ RSS_LIST = [
 ]
 SEEN_FILE = "seen.txt"
 FIXED_TAGS = [
-    "令和幕府瓦版","時事ニュース","日本経済","政治ニュース","ニュース解説",
-    "庶民目線ニュース","速報","解説","トレンド","日本の今","Xニュース","今日のニュース",
+    "令和幕府かわら版","こどもニュース","やさしいニュース","日本経済","政治ニュース",
+    "社会のしくみ","ニュース解説","庶民目線ニュース","教育ニュース","今日のニュース",
 ]
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# 🔽 ここが今回のポイント（全部Secretsから読む）
+# 🔽 X（旧Twitter）の認証情報
 X_API_KEY = os.getenv("X_API_KEY")
 X_API_SECRET = os.getenv("X_API_SECRET")
 X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN")
@@ -58,25 +58,39 @@ def clip_len(txt: str, maxlen: int) -> str:
     return txt if len(txt) <= maxlen else (txt[: maxlen - 1] + "…")
 
 
+# 🟢 やさしい瓦版プロンプト
 def build_prompt(title: str, summary: str, link: str, variant: str) -> str:
     base_rules = textwrap.dedent(f"""
-    あなたは「令和幕府瓦版」シリーズの編集者。事実誤認の断定を避け、煽り表現を控える。
-    Xで見やすいように改行し、280字±30を目安にする。
+    あなたは「令和幕府かわら版」の編集者です。
+    小学生でも理解できるように、やさしく・わかりやすく・前向きにニュースを伝えます。
+    文字数はハッシュタグ込みで280字前後。
+    表記ゆれを避け、難しい言葉は必ず言い換えること。
 
-    固定タグ:
+    構成：
+    🏯【令和幕府かわら版：○○の巻】
+    💡なぜ話題になったの？
+    🏮よいところ
+    ⚖️ちょっと残念なところ
+    📜かわら版屋のひとこと（まとめ）
+
+    固定タグ：
     #{' #'.join(FIXED_TAGS)}
-    """).strip()
 
-    if variant == "yasashii":
-        base_rules += "\n\n口調：小学生にもわかるやさしい瓦版。"
-    else:
-        base_rules += "\n\n口調：通常版（瓦版×現代語）。"
+    出力例：
+    🏯【令和幕府かわら版：お金の話】
+    💡なぜ話題になったの？ → ○○だから。
+    🏮よいところ → ○○がよくなる。
+    ⚖️ちょっと残念 → ○○が心配。
+    📜かわら版屋のひとこと → ○○するといいのう。
+    #令和幕府かわら版 #こどもニュース
+    """)
 
     user = textwrap.dedent(f"""
     タイトル: {title}
     要旨: {summary}
     出典URL: {link}
     """).strip()
+
     return base_rules + "\n\n" + user
 
 
@@ -86,10 +100,10 @@ def call_openai(prompt: str, fallback_text: str) -> str:
     body = {
         "model": OPENAI_MODEL,
         "messages": [
-            {"role": "system", "content": "You are a careful Japanese editor for X posts."},
+            {"role": "system", "content": "You are a kind Japanese editor for children’s news posts."},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.4,
+        "temperature": 0.5,
     }
     for attempt in range(3):
         r = requests.post(url, headers=headers, json=body, timeout=30)
@@ -107,18 +121,7 @@ def call_openai(prompt: str, fallback_text: str) -> str:
 
 
 def post_to_x(text: str):
-    # OAuth1.0a 署名で /2/tweets にPOSTする
-    assert X_API_KEY, "X_API_KEY not set"
-    assert X_API_SECRET, "X_API_SECRET not set"
-    assert X_ACCESS_TOKEN, "X_ACCESS_TOKEN not set"
-    assert X_ACCESS_TOKEN_SECRET, "X_ACCESS_TOKEN_SECRET not set"
-
-    auth = OAuth1(
-        X_API_KEY,
-        X_API_SECRET,
-        X_ACCESS_TOKEN,
-        X_ACCESS_TOKEN_SECRET,
-    )
+    auth = OAuth1(X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET)
     url = "https://api.x.com/2/tweets"
     r = requests.post(url, auth=auth, json={"text": text}, timeout=30)
     if r.status_code not in (200, 201):
@@ -127,7 +130,6 @@ def post_to_x(text: str):
 
 def main():
     assert OPENAI_API_KEY, "OPENAI_API_KEY not set"
-
     seen = load_seen()
     new_hashes = []
     picked = []
@@ -161,7 +163,13 @@ def main():
 
     for it in picked:
         prompt = build_prompt(it["title"], it["summary"], it["final"], TEMPLATE_VARIANT)
-        fallback = f"🏯【令和幕府瓦版】{it['title']}\n#令和幕府瓦版 #時事ニュース"
+        fallback = (
+            "🏯【令和幕府かわら版：速報の巻】\n"
+            f"本日の話題：{it['title']}\n"
+            "――むずかしい話をやさしく伝える準備中じゃ。\n"
+            "📜 かわら版屋のひとこと：また後ほど詳しくお届けするぞ！\n"
+            "#令和幕府かわら版 #こどもニュース #やさしいニュース"
+        )
         draft = call_openai(prompt, fallback)
         tweet = draft if len(draft) <= 280 else clip_len(draft, 280)
         post_to_x(tweet)
